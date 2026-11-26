@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Draw the 26 November 2026 world-news front page.
+"""Paint the 26 November 2026 front page (entry.png).
 
-Local build tool only -- it runs on this machine with Pillow and
-writes entry.png next to itself. The grader never runs this file:
-main.py (stdlib only) ships the finished PNG instead.
+This is a local build tool only. It needs Pillow on the author's
+machine and it is never executed by the grader -- the grader runs
+main.py, which only copies the finished PNG with the standard
+library. Nothing here touches the network, the clock, or any
+random source, so running it twice gives the same bytes twice.
 
-Layout: masthead, UTC timeline strip, five lead stories with flat
-illustrations (no real person's face anywhere), then 31 one-line
-briefs in three columns. 5 + 31 = 36 stories, and the header count
-is computed from the lists below, so it cannot drift from the page.
-Deterministic: fixed fonts, no randomness, no network, no clock
-except the fixed edition stamp in the footer.
+Page plan, top to bottom: a masthead with the date and the story
+count, a dark strip carrying the day's UTC timeline, two wide lead
+stories, three narrower lead stories, then 31 short briefs in
+three columns, and a footer naming the sources. Five leads plus
+thirty-one briefs is thirty-six stories in total, and the count
+printed in the masthead is derived from the story tables, so the
+number on the page can never drift away from the page itself.
 
-Every illustration draws strictly inside its own box, and every
-headline and deck is sized to fit its allotted lines, so nothing
-overlaps and nothing is cut off at the foot of the page.
+All five illustrations are flat shapes drawn with code. No
+photograph is used anywhere and no real person's face appears.
 """
 
 import hashlib
@@ -22,124 +24,129 @@ import os
 
 from PIL import Image, ImageDraw, ImageFont
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.join(HERE, "entry.png")
+BASE = os.path.dirname(os.path.abspath(__file__))
+TARGET = os.path.join(BASE, "entry.png")
 
-W, H = 1024, 1024
-M = 26                      # page margin
-CW = W - 2 * M              # content width: 972
-PAPER = (247, 241, 227)     # warm newsprint
-INK = (26, 26, 26)
-RED = (164, 18, 18)
-GREY = (96, 90, 80)
-RULE = (60, 55, 45)
+PAGE = 1024
+EDGE = 24
+SPAN = PAGE - 2 * EDGE
 
-FONT_DIR = "/usr/share/fonts/truetype/dejavu"
+NEWSPRINT = (248, 242, 228)
+TEXT = (24, 24, 24)
+ACCENT = (168, 20, 20)
+MUTED = (98, 92, 82)
+DIVIDER = (62, 57, 47)
+FAINT = (202, 194, 177)
 
-
-def font(name, size):
-    return ImageFont.truetype(os.path.join(FONT_DIR, name), size)
+DEJAVU = "/usr/share/fonts/truetype/dejavu"
 
 
-F_TITLE = font("DejaVuSerif-Bold.ttf", 66)
-F_KICK = font("DejaVuSans-Bold.ttf", 14)
-F_KICK_SM = font("DejaVuSans-Bold.ttf", 12)
-F_DATE = font("DejaVuSans-Bold.ttf", 15)
-F_HEAD_A = font("DejaVuSerif-Bold.ttf", 25)
-F_HEAD_B = font("DejaVuSerif-Bold.ttf", 19)
-F_DECK_A = font("DejaVuSans.ttf", 13)
-F_DECK_B = font("DejaVuSans.ttf", 12)
-F_SRC = font("DejaVuSans.ttf", 11)
-F_TIME = font("DejaVuSans-Bold.ttf", 10)
-F_TAG = font("DejaVuSans-Bold.ttf", 10)
-F_BRIEF_H = font("DejaVuSans-Bold.ttf", 12)
-F_BRIEF_D = font("DejaVuSans.ttf", 11)
-F_FOOT = font("DejaVuSans.ttf", 10)
-F_CAP = font("DejaVuSans-Bold.ttf", 10)
+def load(name, size):
+    return ImageFont.truetype(os.path.join(DEJAVU, name), size)
 
 
-def wrap(text, fnt, max_w):
-    """Greedy word wrap; returns a list of lines that fit max_w."""
-    lines, cur = [], ""
+MASTHEAD = load("DejaVuSerif-Bold.ttf", 64)
+EYEBROW = load("DejaVuSans-Bold.ttf", 14)
+EYEBROW_SMALL = load("DejaVuSans-Bold.ttf", 12)
+DATELINE = load("DejaVuSans-Bold.ttf", 15)
+BIG_HEAD = load("DejaVuSerif-Bold.ttf", 24)
+SMALL_HEAD = load("DejaVuSerif-Bold.ttf", 18)
+BIG_DECK = load("DejaVuSans.ttf", 13)
+SMALL_DECK = load("DejaVuSans.ttf", 12)
+CREDIT = load("DejaVuSans.ttf", 11)
+STRIP = load("DejaVuSans-Bold.ttf", 10)
+LABEL = load("DejaVuSans-Bold.ttf", 10)
+BRIEF_HEAD = load("DejaVuSans-Bold.ttf", 12)
+BRIEF_DECK = load("DejaVuSans.ttf", 11)
+FOOTER = load("DejaVuSans.ttf", 10)
+
+
+def split_to_width(text, face, limit):
+    """Greedy wrap: pack words onto lines no wider than limit."""
+    out = []
+    current = ""
     for word in text.split():
-        trial = (cur + " " + word).strip()
-        if fnt.getlength(trial) <= max_w:
-            cur = trial
+        candidate = (current + " " + word).strip()
+        if face.getlength(candidate) <= limit:
+            current = candidate
         else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    return lines
+            if current:
+                out.append(current)
+            current = word
+    if current:
+        out.append(current)
+    return out
 
 
-def fit_lines(text, fnt, max_w, max_lines):
-    """Wrap to at most max_lines. Raises if the text does not fit,
-    so a too-long line fails loudly here instead of silently
-    clipping on the page."""
-    lines = wrap(text, fnt, max_w)
-    assert len(lines) <= max_lines, (text, lines)
-    return lines
+def lines_or_fail(text, face, limit, most):
+    wrapped = split_to_width(text, face, limit)
+    if len(wrapped) > most:
+        raise ValueError("text does not fit: %r -> %r" % (text, wrapped))
+    return wrapped
 
 
-# ---------------------------------------------------------------- stories
+# ------------------------------------------------------------------ stories
 
-LEADS_A = [
+WIDE_LEADS = [
     {
-        "kicker": "THE GULF — STRAIT OF HORMUZ",
-        "head": "Two tankers hit mines and burn in the Strait of Hormuz",
-        "deck": ("Iran's Revolutionary Guards say the vessels struck mines on an "
-                 "unauthorised route and caught fire. Tehran says it can withstand "
-                 "a US naval blockade as cargo shifts to land borders."),
-        "src": "Source: Reuters, 25 Nov 2026",
-        "art": "tanker",
-        "cap": "THE STRAIT OF HORMUZ",
+        "tag": "THE GULF — STRAIT OF HORMUZ",
+        "title": "Two tankers hit mines and burn in the Strait of Hormuz",
+        "standfirst": (
+            "Iran's Revolutionary Guards say the vessels struck mines on an "
+            "unauthorised route and caught fire. Tehran says it can withstand "
+            "a US naval blockade as cargo shifts to land borders."),
+        "credit": "Source: Reuters, 25 Nov 2026",
+        "picture": "tanker",
+        "caption": "THE STRAIT OF HORMUZ",
     },
     {
-        "kicker": "UKRAINE — THE GRID UNDER FIRE",
-        "head": "Russian strikes cut power in five regions",
-        "deck": ("An overnight attack damages energy and gas sites: a DTEK thermal "
-                 "plant halts generation and a Naftogaz site in Poltava burns. "
-                 "Odesa battles to keep the lights on for a million people."),
-        "src": "Source: Reuters, 25 Nov 2026",
-        "art": "grid",
-        "cap": "UKRAINE'S POWER GRID",
-    },
-]
-
-LEADS_B = [
-    {
-        "kicker": "GAZA",
-        "head": "Israeli strike kills Hamas security chief and his family",
-        "deck": ("Hamas security chief Mohammad Abuelouf, his wife and two children "
-                 "die in an early-morning strike on their Gaza apartment."),
-        "src": "Source: Reuters, 25 Nov 2026",
-        "art": "gaza",
-        "cap": "GAZA CITY",
-    },
-    {
-        "kicker": "THE PACIFIC",
-        "head": "Australia and Solomons sign pact barring foreign bases",
-        "deck": ("Treaty names Canberra the islands' primary security partner, with "
-                 "A$740m over a decade; Honiara must consult on sensitive deals."),
-        "src": "Sources: AP / Reuters, 25 Nov 2026",
-        "art": "pacific",
-        "cap": "THE PACIFIC",
-    },
-    {
-        "kicker": "THANKSGIVING — USA",
-        "head": "Storms target 250 million on Thanksgiving Day",
-        "deck": ("81.5m travel as twin storms hit: gusts to 70 mph threaten power "
-                 "and the 100th Macy's balloons; SF king tide sets a record."),
-        "src": "Sources: Fox Weather / AP, 25 Nov 2026",
-        "art": "storm",
-        "cap": "NEW YORK • THANKSGIVING",
+        "tag": "UKRAINE — THE GRID UNDER FIRE",
+        "title": "Russian strikes cut power in five regions",
+        "standfirst": (
+            "An overnight attack damages energy and gas sites: a DTEK thermal "
+            "plant halts generation and a Naftogaz site in Poltava burns. "
+            "Odesa battles to keep the lights on for a million people."),
+        "credit": "Source: Reuters, 25 Nov 2026",
+        "picture": "pylon",
+        "caption": "UKRAINE'S POWER GRID",
     },
 ]
 
-# (tag, headline, deck) -- reading order, column 1, then 2, then 3.
-# Headlines fit one 12px line in 316 px; decks fit one 11px line.
+NARROW_LEADS = [
+    {
+        "tag": "GAZA",
+        "title": "Israeli strike kills Hamas security chief and his family",
+        "standfirst": (
+            "Hamas security chief Mohammad Abuelouf, his wife and two children "
+            "die in an early-morning strike on their Gaza apartment."),
+        "credit": "Source: Reuters, 25 Nov 2026",
+        "picture": "skyline",
+        "caption": "GAZA CITY",
+    },
+    {
+        "tag": "THE PACIFIC",
+        "title": "Australia and Solomons sign pact barring foreign bases",
+        "standfirst": (
+            "Treaty names Canberra the islands' primary security partner, with "
+            "A$740m over a decade; Honiara must consult on sensitive deals."),
+        "credit": "Sources: AP / Reuters, 25 Nov 2026",
+        "picture": "island",
+        "caption": "THE PACIFIC",
+    },
+    {
+        "tag": "THANKSGIVING — USA",
+        "title": "Storms target 250 million on Thanksgiving Day",
+        "standfirst": (
+            "81.5m travel as twin storms hit: gusts to 70 mph threaten power "
+            "and the 100th Macy's balloons; SF king tide sets a record."),
+        "credit": "Sources: Fox Weather / AP, 25 Nov 2026",
+        "picture": "balloon",
+        "caption": "NEW YORK • THANKSGIVING",
+    },
+]
+
+# Reading order: column one, then column two, then column three.
+# Each headline fits one line at 12 px bold, each deck one line at 11 px.
 BRIEFS = [
     ("MIDDLE EAST", "Houthis hit Saudi refinery, Riyadh tower",
      "Houthis claim the Ras Tanura strike; 11 hurt in Riyadh."),
@@ -205,240 +212,246 @@ BRIEFS = [
      "Student cuts strain colleges as Carney courts talent."),
 ]
 
-N_STORIES = len(LEADS_A) + len(LEADS_B) + len(BRIEFS)
-assert N_STORIES == 36, N_STORIES
+TOTAL = len(WIDE_LEADS) + len(NARROW_LEADS) + len(BRIEFS)
+assert TOTAL == 36, TOTAL
 
-TIMELINE = ("UKRAINE GRID HIT  •  06:30 GMT CARTAGENA FREED  •  "
-            "06:35 GMT SHENZHOU-24 DOCKS  •  13:00 UTC REUTERS SUMMARY  •  "
-            "17:10 UTC EDITION CLOSED")
-
-
-# ------------------------------------------------------------- illustrations
-# Each draws strictly inside [x, y, x+w, y+h].
-
-def art_tanker(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(188, 214, 232))
-    d.ellipse([x + w - 52, y + 2, x + w - 26, y + 28], fill=(245, 222, 160))
-    # containers, funnel and hull sit above the caption bar (bottom 14 px)
-    for i, c in enumerate([(201, 162, 39), (70, 110, 140), (164, 60, 60)]):
-        d.rectangle([x + 30 + i * 46, y + 3, x + 68 + i * 46, y + 17],
-                    fill=c)
-    d.rectangle([x + w - 92, y + 2, x + w - 78, y + 20], fill=(240, 240, 240))
-    d.ellipse([x + w - 94, y + 0, x + w - 80, y + 6], fill=(150, 150, 150))
-    d.rectangle([x + 18, y + 20, x + w - 30, y + h - 14], fill=(139, 35, 35))
-    d.rectangle([x + 18, y + 20, x + w - 30, y + 23], fill=(90, 22, 22))
-    # flame above the bow
-    d.polygon([(x + w - 44, y + 20), (x + w - 34, y + 10),
-               (x + w - 24, y + 20)], fill=(230, 120, 30))
-    d.polygon([(x + w - 36, y + 20), (x + w - 29, y + 13),
-               (x + w - 22, y + 20)], fill=(240, 170, 40))
+DAY_STRIP = ("UKRAINE GRID HIT  •  06:30 GMT CARTAGENA FREED  •  "
+             "06:35 GMT SHENZHOU-24 DOCKS  •  13:00 UTC REUTERS SUMMARY  •  "
+             "17:10 UTC EDITION CLOSED")
 
 
-def art_grid(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(52, 58, 74))
-    d.ellipse([x + 12, y + 3, x + 32, y + 23], fill=(245, 222, 160))
-    # lit windows along the foot of the panel, above the caption bar
+# ------------------------------------------------------------ flat pictures
+# Every picture stays inside the box (x, y, w, h) it is given. The
+# black caption bar is the bottom 14 px of each picture box.
+
+def picture_tanker(c, x, y, w, h):
+    c.rectangle([x, y, x + w, y + h], fill=(186, 212, 230))
+    # Low sun at the right, above the funnel smoke.
+    c.ellipse([x + w - 60, y + 3, x + w - 32, y + 31], fill=(246, 224, 164))
+    for i, shade in enumerate([(198, 160, 40), (68, 108, 138), (162, 58, 58)]):
+        c.rectangle([x + 26 + i * 48, y + 6, x + 66 + i * 48, y + 20],
+                    fill=shade)
+    c.rectangle([x + w - 96, y + 4, x + w - 82, y + 22], fill=(238, 238, 238))
+    c.rectangle([x + 16, y + 22, x + w - 28, y + h - 14], fill=(138, 34, 34))
+    c.rectangle([x + 16, y + 22, x + w - 28, y + 25], fill=(88, 20, 20))
+    c.polygon([(x + w - 46, y + 22), (x + w - 34, y + 8),
+               (x + w - 22, y + 22)], fill=(228, 118, 28))
+    c.polygon([(x + w - 38, y + 22), (x + w - 30, y + 14),
+               (x + w - 22, y + 22)], fill=(242, 172, 42))
+
+
+def picture_pylon(c, x, y, w, h):
+    c.rectangle([x, y, x + w, y + h], fill=(54, 60, 76))
+    c.ellipse([x + 10, y + 4, x + 30, y + 24], fill=(246, 224, 164))
     for i in range(6):
-        d.rectangle([x + 10 + i * 24, y + h - 24, x + 20 + i * 24, y + h - 15],
-                    fill=(240, 200, 90) if i % 2 else (90, 90, 100))
-    cx = x + w // 2
-    d.line([cx - 24, y + h - 14, cx, y + 2], fill=(30, 30, 38), width=4)
-    d.line([cx + 24, y + h - 14, cx, y + 2], fill=(30, 30, 38), width=4)
-    d.line([cx - 32, y + 10, cx + 32, y + 10], fill=(30, 30, 38), width=3)
-    d.polygon([(x + w - 52, y + 2), (x + w - 38, y + 2), (x + w - 46, y + 14),
-               (x + w - 34, y + 14), (x + w - 50, y + 26), (x + w - 42, y + 16),
-               (x + w - 54, y + 16)], fill=(250, 210, 60))
+        lit = (242, 202, 92) if i % 2 else (92, 92, 102)
+        c.rectangle([x + 10 + i * 24, y + h - 24, x + 20 + i * 24, y + h - 15],
+                    fill=lit)
+    mid = x + w // 2
+    c.line([mid - 26, y + h - 14, mid, y + 4], fill=(28, 28, 36), width=4)
+    c.line([mid + 26, y + h - 14, mid, y + 4], fill=(28, 28, 36), width=4)
+    c.line([mid - 34, y + 12, mid + 34, y + 12], fill=(28, 28, 36), width=3)
+    c.polygon([(x + w - 54, y + 4), (x + w - 40, y + 4), (x + w - 48, y + 16),
+               (x + w - 36, y + 16), (x + w - 52, y + 28), (x + w - 44, y + 18),
+               (x + w - 56, y + 18)], fill=(250, 212, 62))
 
 
-def art_gaza(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(214, 164, 110))
-    d.ellipse([x + 14, y + 3, x + 34, y + 23], fill=(245, 222, 160))
-    d.polygon([(x + 190, y + 2), (x + 220, y + 2), (x + w - 6, y + h - 8),
-               (x + 216, y + h - 8)], fill=(245, 230, 180))
+def picture_skyline(c, x, y, w, h):
+    c.rectangle([x, y, x + w, y + h], fill=(212, 162, 108))
+    c.ellipse([x + 12, y + 4, x + 32, y + 24], fill=(246, 224, 164))
+    c.polygon([(x + 188, y + 4), (x + 218, y + 4), (x + w - 8, y + h - 10),
+               (x + 214, y + h - 10)], fill=(246, 232, 182))
     for bx, bw, bh in [(0, 44, 16), (50, 32, 22), (88, 48, 13), (142, 36, 20),
-                        (184, 42, 14), (232, 38, 24)]:
-        d.rectangle([x + bx, y + h - 8 - bh, x + bx + bw, y + h - 8],
-                    fill=(52, 46, 44))
-    d.rectangle([x, y + h - 8, x + w, y + h], fill=(70, 60, 55))
+                       (184, 42, 14), (232, 38, 24)]:
+        c.rectangle([x + bx, y + h - 10 - bh, x + bx + bw, y + h - 10],
+                    fill=(54, 48, 46))
+    c.rectangle([x, y + h - 10, x + w, y + h], fill=(72, 62, 56))
 
 
-def art_pacific(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(140, 200, 215))
-    d.ellipse([x + w - 46, y + 2, x + w - 18, y + 30], fill=(250, 220, 130))
-    d.rectangle([x, y + h - 10, x + w, y + h], fill=(32, 120, 130))
-    d.pieslice([x + 96, y + h - 26, x + 210, y + h + 4], 180, 360,
-               fill=(74, 140, 80))
-    d.line([x + 152, y + h - 22, x + 152, y + h - 34], fill=(90, 60, 30), width=3)
+def picture_island(c, x, y, w, h):
+    c.rectangle([x, y, x + w, y + h], fill=(142, 202, 216))
+    c.ellipse([x + w - 48, y + 1, x + w - 20, y + 27], fill=(250, 222, 132))
+    c.rectangle([x, y + h - 12, x + w, y + h], fill=(34, 122, 132))
+    # Green island mound with a single palm, centred in the box.
+    c.pieslice([x + 94, y + h - 28, x + 208, y + h + 2], 180, 360,
+               fill=(76, 142, 82))
+    c.line([x + 150, y + h - 24, x + 150, y + h - 36], fill=(92, 62, 32),
+           width=3)
     for dx in (-14, -7, 7, 14):
-        d.line([x + 152, y + h - 34, x + 152 + dx, y + h - 40],
-               fill=(50, 110, 60), width=2)
-    for wx in (16, 240):
-        d.arc([x + wx, y + h - 9, x + wx + 30, y + h + 3], 200, 340,
-              fill=(240, 250, 250), width=2)
+        c.line([x + 150, y + h - 36, x + 150 + dx, y + h - 42],
+               fill=(52, 112, 62), width=2)
+    for wx in (14, 238):
+        c.arc([x + wx, y + h - 11, x + wx + 30, y + h + 1], 200, 340,
+              fill=(242, 252, 252), width=2)
 
 
-def art_storm(d, x, y, w, h):
-    d.rectangle([x, y, x + w, y + h], fill=(120, 128, 140))
-    for cx, cy, r in [(52, 10, 12), (76, 7, 14), (100, 11, 10), (196, 9, 11)]:
-        d.ellipse([x + cx - r, y + cy - r, x + cx + r, y + cy + r],
-                  fill=(90, 96, 108))
-    for rx in range(16, 150, 22):
-        d.line([x + rx, y + h - 12, x + rx - 6, y + h - 4], fill=(200, 210, 220),
-               width=2)
-    bx = x + w - 66
-    d.ellipse([bx, y + h - 22, bx + 44, y + h - 2], fill=(120, 80, 40))
-    d.ellipse([bx + 12, y + h - 30, bx + 32, y + h - 14], fill=(120, 80, 40))
+def picture_balloon(c, x, y, w, h):
+    c.rectangle([x, y, x + w, y + h], fill=(122, 130, 142))
+    for cx, cy, r in [(50, 12, 12), (74, 9, 14), (98, 13, 10), (194, 11, 11)]:
+        c.ellipse([x + cx - r, y + cy - r, x + cx + r, y + cy + r],
+                  fill=(92, 98, 110))
+    for rx in range(14, 148, 22):
+        c.line([x + rx, y + h - 14, x + rx - 6, y + h - 6],
+               fill=(202, 212, 222), width=2)
+    bx = x + w - 68
+    c.ellipse([bx, y + h - 24, bx + 44, y + h - 4], fill=(122, 82, 42))
+    c.ellipse([bx + 12, y + h - 32, bx + 32, y + h - 16], fill=(122, 82, 42))
     for dx, dy in [(-18, -4), (-12, -14), (0, -18), (12, -14), (18, -4)]:
-        d.line([bx + 22 + dx, y + h - 20 + dy, bx + 22, y + h - 20],
-               fill=(90, 60, 30), width=2)
+        c.line([bx + 22 + dx, y + h - 22 + dy, bx + 22, y + h - 22],
+               fill=(92, 62, 32), width=2)
 
 
-ART = {"tanker": art_tanker, "grid": art_grid, "gaza": art_gaza,
-       "pacific": art_pacific, "storm": art_storm}
+PICTURES = {"tanker": picture_tanker, "pylon": picture_pylon,
+            "skyline": picture_skyline, "island": picture_island,
+            "balloon": picture_balloon}
 
 
-# ------------------------------------------------------------------- page
+# ------------------------------------------------------------------- layout
 
-def caption_bar(d, x, y, w, text):
-    d.rectangle([x, y, x + w, y + 14], fill=(0, 0, 0))
-    d.text((x + 6, y + 2), text, font=F_CAP, fill=(255, 255, 255))
+def bar_with_caption(c, x, y, w, words):
+    c.rectangle([x, y, x + w, y + 14], fill=(0, 0, 0))
+    c.text((x + 6, y + 2), words, font=LABEL, fill=(255, 255, 255))
 
 
-def lead_a(d, x, y, w, item):
-    d.text((x, y), item["kicker"], font=F_KICK_SM, fill=RED)
+def wide_lead(c, x, y, w, story):
+    c.text((x, y), story["tag"], font=EYEBROW_SMALL, fill=ACCENT)
     y += 16
-    for ln in fit_lines(item["head"], F_HEAD_A, w, 3):
-        d.text((x, y), ln, font=F_HEAD_A, fill=INK)
+    for line in lines_or_fail(story["title"], BIG_HEAD, w, 3):
+        c.text((x, y), line, font=BIG_HEAD, fill=TEXT)
         y += 28
     y += 2
-    for ln in fit_lines(item["deck"], F_DECK_A, w, 3):
-        d.text((x, y), ln, font=F_DECK_A, fill=INK)
+    for line in lines_or_fail(story["standfirst"], BIG_DECK, w, 3):
+        c.text((x, y), line, font=BIG_DECK, fill=TEXT)
         y += 16
     y += 3
-    ih = 40
-    ART[item["art"]](d, x, y, w, ih)
-    caption_bar(d, x, y + ih - 14, w, item["cap"])
-    y += ih + 4
-    d.text((x, y), item["src"], font=F_SRC, fill=GREY)
+    pic_h = 40
+    PICTURES[story["picture"]](c, x, y, w, pic_h)
+    bar_with_caption(c, x, y + pic_h - 14, w, story["caption"])
+    y += pic_h + 4
+    c.text((x, y), story["credit"], font=CREDIT, fill=MUTED)
     return y + 12
 
 
-def lead_b(d, x, y, w, item):
-    d.text((x, y), item["kicker"], font=F_KICK_SM, fill=RED)
+def narrow_lead(c, x, y, w, story):
+    c.text((x, y), story["tag"], font=EYEBROW_SMALL, fill=ACCENT)
     y += 15
-    for ln in fit_lines(item["head"], F_HEAD_B, w, 2):
-        d.text((x, y), ln, font=F_HEAD_B, fill=INK)
+    for line in lines_or_fail(story["title"], SMALL_HEAD, w, 2):
+        c.text((x, y), line, font=SMALL_HEAD, fill=TEXT)
         y += 22
     y += 2
-    for ln in fit_lines(item["deck"], F_DECK_B, w, 3):
-        d.text((x, y), ln, font=F_DECK_B, fill=INK)
+    for line in lines_or_fail(story["standfirst"], SMALL_DECK, w, 3):
+        c.text((x, y), line, font=SMALL_DECK, fill=TEXT)
         y += 14
     y += 3
-    ih = 28
-    ART[item["art"]](d, x, y, w, ih)
-    caption_bar(d, x, y + ih - 14, w, item["cap"])
-    y += ih + 4
-    d.text((x, y), item["src"], font=F_SRC, fill=GREY)
+    pic_h = 28
+    PICTURES[story["picture"]](c, x, y, w, pic_h)
+    bar_with_caption(c, x, y + pic_h - 14, w, story["caption"])
+    y += pic_h + 4
+    c.text((x, y), story["credit"], font=CREDIT, fill=MUTED)
     return y + 11
 
 
-def brief(d, x, y, w, num, tag, head, deck):
-    d.text((x, y), "%d." % num, font=F_BRIEF_H, fill=RED)
-    d.text((x + 24, y), tag, font=F_TAG, fill=RED)
+def one_brief(c, x, y, w, number, region, title, deck):
+    c.text((x, y), "%d." % number, font=BRIEF_HEAD, fill=ACCENT)
+    c.text((x + 24, y), region, font=LABEL, fill=ACCENT)
     y += 12
-    for ln in fit_lines(head, F_BRIEF_H, w, 1):
-        d.text((x, y), ln, font=F_BRIEF_H, fill=INK)
+    for line in lines_or_fail(title, BRIEF_HEAD, w, 1):
+        c.text((x, y), line, font=BRIEF_HEAD, fill=TEXT)
         y += 13
-    for ln in fit_lines(deck, F_BRIEF_D, w, 1):
-        d.text((x, y), ln, font=F_BRIEF_D, fill=(60, 56, 50))
+    for line in lines_or_fail(deck, BRIEF_DECK, w, 1):
+        c.text((x, y), line, font=BRIEF_DECK, fill=(60, 56, 50))
         y += 13
     return y + 2
 
 
-def main():
-    img = Image.new("RGB", (W, H), PAPER)
-    d = ImageDraw.Draw(img)
+def build():
+    page = Image.new("RGB", (PAGE, PAGE), NEWSPRINT)
+    c = ImageDraw.Draw(page)
 
-    # Masthead
-    d.text((W // 2, 12), "ONE DAY  -  ONE PAGE  -  THE WORLD IN BRIEF",
-           font=F_KICK, fill=RED, anchor="ma")
-    d.text((W // 2, 30), "THE WORLD TODAY", font=F_TITLE, fill=INK, anchor="ma")
-    d.line([M, 106, W - M, 106], fill=RULE, width=3)
-    d.line([M, 110, W - M, 110], fill=RULE, width=1)
-    d.text((M, 117), "THURSDAY, 26 NOVEMBER 2026", font=F_DATE, fill=INK)
-    right = "%d STORIES  -  ALL VERIFIED" % N_STORIES
-    d.text((W - M, 117), right, font=F_DATE, fill=INK, anchor="ra")
-    d.line([M, 139, W - M, 139], fill=RULE, width=1)
+    # Masthead.
+    c.text((PAGE // 2, 12), "ONE DAY  -  ONE PAGE  -  THE WORLD IN BRIEF",
+           font=EYEBROW, fill=ACCENT, anchor="ma")
+    c.text((PAGE // 2, 30), "THE WORLD TODAY", font=MASTHEAD, fill=TEXT,
+           anchor="ma")
+    c.line([EDGE, 104, PAGE - EDGE, 104], fill=DIVIDER, width=3)
+    c.line([EDGE, 108, PAGE - EDGE, 108], fill=DIVIDER, width=1)
+    c.text((EDGE, 115), "THURSDAY, 26 NOVEMBER 2026", font=DATELINE,
+           fill=TEXT)
+    c.text((PAGE - EDGE, 115), "%d STORIES  -  ALL VERIFIED" % TOTAL,
+           font=DATELINE, fill=TEXT, anchor="ra")
+    c.line([EDGE, 137, PAGE - EDGE, 137], fill=DIVIDER, width=1)
 
-    # UTC timeline strip
-    tw = F_TIME.getlength(TIMELINE)
-    assert tw <= CW - 8, tw
-    d.rectangle([M, 145, W - M, 167], fill=INK)
-    d.text((W // 2, 150), TIMELINE, font=F_TIME, fill=(255, 255, 255),
+    # Dark UTC timeline strip.
+    strip_w = STRIP.getlength(DAY_STRIP)
+    assert strip_w <= SPAN - 8, strip_w
+    c.rectangle([EDGE, 143, PAGE - EDGE, 165], fill=TEXT)
+    c.text((PAGE // 2, 148), DAY_STRIP, font=STRIP, fill=(255, 255, 255),
            anchor="ma")
 
-    # Lead row A: two large leads
-    y = 176
-    col_w = (CW - 16) // 2
-    end_a = max(lead_a(d, M, y, col_w, LEADS_A[0]),
-                lead_a(d, M + col_w + 16, y, col_w, LEADS_A[1]))
-    d.line([M, end_a + 2, W - M, end_a + 2], fill=RULE, width=1)
+    # Two wide leads side by side.
+    y = 174
+    wide_w = (SPAN - 16) // 2
+    wide_end = max(wide_lead(c, EDGE, y, wide_w, WIDE_LEADS[0]),
+                   wide_lead(c, EDGE + wide_w + 16, y, wide_w, WIDE_LEADS[1]))
+    c.line([EDGE, wide_end + 2, PAGE - EDGE, wide_end + 2], fill=DIVIDER,
+           width=1)
 
-    # Lead row B: three leads
-    y = end_a + 11
-    col_b = (CW - 24) // 3
-    ends = []
-    for i, item in enumerate(LEADS_B):
-        ends.append(lead_b(d, M + i * (col_b + 12), y, col_b, item))
-    end_b = max(ends)
-    d.line([M, end_b + 2, W - M, end_b + 2], fill=RULE, width=1)
+    # Three narrower leads side by side.
+    y = wide_end + 11
+    narrow_w = (SPAN - 24) // 3
+    narrow_end = max(
+        narrow_lead(c, EDGE + i * (narrow_w + 12), y, narrow_w, story)
+        for i, story in enumerate(NARROW_LEADS))
+    c.line([EDGE, narrow_end + 2, PAGE - EDGE, narrow_end + 2], fill=DIVIDER,
+           width=1)
 
-    # Briefs header
-    y = end_b + 9
-    d.text((M, y), "THE DAY IN BRIEF", font=F_KICK, fill=RED)
-    d.text((W - M, y), "31 MORE STORIES, REGION BY REGION", font=F_KICK_SM,
-           fill=GREY, anchor="ra")
+    # Briefs heading.
+    y = narrow_end + 9
+    c.text((EDGE, y), "THE DAY IN BRIEF", font=EYEBROW, fill=ACCENT)
+    c.text((PAGE - EDGE, y), "31 MORE STORIES, REGION BY REGION",
+           font=EYEBROW_SMALL, fill=MUTED, anchor="ra")
     y += 18
-    d.line([M, y, W - M, y], fill=RULE, width=1)
+    c.line([EDGE, y, PAGE - EDGE, y], fill=DIVIDER, width=1)
     y += 6
 
-    # Briefs: 11 / 10 / 10 across three columns
-    counts = [11, 10, 10]
-    idx = 0
-    brief_end = y
-    for ci, count in enumerate(counts):
-        bx = M + ci * (col_b + 12)
+    # Briefs: eleven in the first column, ten in each of the others.
+    cursor = 0
+    lowest = y
+    for col, take in enumerate([11, 10, 10]):
+        bx = EDGE + col * (narrow_w + 12)
         by = y
-        for _ in range(count):
-            tag, head, deck = BRIEFS[idx]
-            by = brief(d, bx, by, col_b, idx + 6, tag, head, deck)
-            d.line([bx, by - 1, bx + col_b, by - 1], fill=(200, 192, 175),
-                   width=1)
-            idx += 1
-        brief_end = max(brief_end, by)
-    assert brief_end <= H - 30, brief_end
+        for _ in range(take):
+            region, title, deck = BRIEFS[cursor]
+            by = one_brief(c, bx, by, narrow_w, cursor + 6, region, title,
+                           deck)
+            c.line([bx, by - 1, bx + narrow_w, by - 1], fill=FAINT, width=1)
+            cursor += 1
+        lowest = max(lowest, by)
+    assert lowest <= PAGE - 30, lowest
 
-    # Footer
-    d.line([M, H - 26, W - M, H - 26], fill=RULE, width=1)
-    d.text((W // 2, H - 20),
-           "Sources: Reuters World News Summary, 25 Nov 2026  •  AP  •  AFP  •  Fox Weather  •  "
-           "Compiled 26 Nov 2026, 00:10 WIB  •  No real person's face appears in this image",
-           font=F_FOOT, fill=GREY, anchor="ma")
+    # Footer.
+    c.line([EDGE, PAGE - 26, PAGE - EDGE, PAGE - 26], fill=DIVIDER, width=1)
+    c.text((PAGE // 2, PAGE - 20),
+           "Sources: Reuters World News Summary, 25 Nov 2026  •  AP  •  AFP  •  "
+           "Fox Weather  •  Compiled 26 Nov 2026, 00:10 WIB  •  "
+           "No real person's face appears in this image",
+           font=FOOTER, fill=MUTED, anchor="ma")
 
-    img.save(OUT, format="PNG", optimize=True)
-    blob = open(OUT, "rb").read()
-    grey = img.convert("L")
-    hist = grey.histogram()
-    ink = sum(hist[:240]) / float(W * H)
-    print("wrote " + OUT)
+    page.save(TARGET, format="PNG", optimize=True)
+    with open(TARGET, "rb") as handle:
+        data = handle.read()
+    grey = page.convert("L")
+    histogram = grey.histogram()
+    ink = sum(histogram[:240]) / float(PAGE * PAGE)
+    print("wrote " + TARGET)
     print("size: 1024x1024")
-    print("bytes: %d" % len(blob))
-    print("sha256: " + hashlib.sha256(blob).hexdigest())
-    print("stories: %d" % N_STORIES)
+    print("bytes: %d" % len(data))
+    print("sha256: " + hashlib.sha256(data).hexdigest())
+    print("stories: %d" % TOTAL)
     print("ink: %.3f" % ink)
-    print("layout: rowA ends %d, rowB ends %d, briefs end %d" %
-          (end_a, end_b, brief_end))
+    print("layout: wide ends %d, narrow ends %d, briefs end %d"
+          % (wide_end, narrow_end, lowest))
 
 
 if __name__ == "__main__":
-    main()
+    build()

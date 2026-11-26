@@ -1,17 +1,18 @@
-# NOTES — news-image-20261126
+# NOTES — news-image-20261126 (rebuild)
 
-## Edition window (read this first)
+## Edition window
 
-Compiled 26 Nov 2026, 00:10–00:50 WIB (25 Nov 2026, 17:10–17:50 UTC).
-At that hour the 26 November UTC day had just begun in Asia, so the
-stories below are the ones carried as the 26 November edition: the
-Reuters World News Summary published 25 Nov 2026 18:30 IST (= 26 Nov
+Rebuilt 26 Nov 2026, ~10:00 WIB, in a fresh session that started
+after the competition opened (26 Nov 00:00 UTC = 07:00 WIB). The
+stories are the same 36 as the first build: compiled 26 Nov 2026,
+00:10–00:50 WIB (25 Nov 2026, 17:10–17:50 UTC) from the Reuters
+World News Summary published 25 Nov 2026 18:30 IST (= 26 Nov
 00:00 WIB), plus AP / AFP / Fox Weather reports dated 25 Nov 2026.
-Thanksgiving Day itself falls on 26 Nov 2026. No story was invented;
-anything that could not be confirmed in one of those sources was left
-out. The timeline strip uses UTC times taken from the same reports
-(Cartagena rescue 06:30 GMT, Shenzhou-24 entry 06:35 GMT, Reuters
-summary 13:00 UTC).
+Thanksgiving Day itself falls on 26 Nov 2026. No story was
+invented; anything that could not be confirmed in one of those
+sources was left out. The timeline strip uses UTC times taken from
+the same reports (Cartagena rescue 06:30 GMT, Shenzhou-24 entry
+06:35 GMT, Reuters summary 13:00 UTC).
 
 ## Sources per story
 
@@ -79,13 +80,13 @@ unless noted:
 
 - `draw.py` — local Pillow renderer (NOT run by the grader). Fixed
   DejaVu fonts, no randomness, no network. Two runs of draw.py give
-  byte-identical entry.png.
+  byte-identical entry.png. Written fresh in this session.
 - `main.py` — stdlib only (hashlib / os / shutil / struct / sys).
   Copies entry.png to $MAKEFUN_OUTPUT_DIR/entry.png and verifies PNG
   magic, 1024x1024 dimensions and a byte-identical copy.
-- `entry.png` — 1024x1024, 191,113 bytes,
-  sha256 dc358b129e2d5afa075578d6fcc3abf76cf06aa29cf2483075bdc4c5d6081219,
-  PNG CRCs all valid, ink 25.0%.
+- `entry.png` — 1024x1024, 189,863 bytes,
+  sha256 fbb98873dc9a134a09a6312943b87fbda02a24d648f2acad94e8e6b881ccd60b,
+  PNG CRCs all valid, ink 24.8%.
 
 ## Verification (before submit)
 

@@ -54,6 +54,6 @@ Pillow on the author's machine). The grader never runs it.
 
 ## Image
 
-- 1024×1024 PNG, 191,113 bytes (limit 1 MiB)
-- sha256: `dc358b129e2d5afa075578d6fcc3abf76cf06aa29cf2483075bdc4c5d6081219`
-- 36 stories, ink 25.0%
+- 1024×1024 PNG, 189,863 bytes (limit 1 MiB)
+- sha256: `fbb98873dc9a134a09a6312943b87fbda02a24d648f2acad94e8e6b881ccd60b`
+- 36 stories, ink 24.8%
