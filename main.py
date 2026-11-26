@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
-"""Ship the finished 26 November 2026 front page.
+"""Entrypoint: copy entry.png to the grader output directory.
 
-The picture is painted ahead of time by draw.py on the author's
-machine and kept in this repository as entry.png. This program is
-the only part the grader executes, and the grader installs
-nothing, so it stays inside the Python standard library: it reads
-entry.png, checks that it really is the 1024x1024 PNG this entry
-promises, copies it into the output directory, and then reads the
-copy back to prove the copy is byte for byte the same file.
-
-It writes exactly one file, $MAKEFUN_OUTPUT_DIR/entry.png
-(/output when the variable is unset). It never writes into the
-repository, never opens a socket, and always yields the same
-bytes, so two runs are identical. A missing output directory is
-created first; an existing entry.png there is replaced.
+Standard library only. Verifies the PNG magic bytes, the 1024x1024
+size from the IHDR chunk, and that the copied file is byte-identical
+to the source next to this file.
 """
 
 import hashlib
@@ -22,52 +12,54 @@ import shutil
 import struct
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO_PNG = os.path.join(HERE, "entry.png")
-SIGNATURE = b"\x89PNG\r\n\x1a\n"
-WANTED = (1024, 1024)
 
-
-def complain(text):
-    print("error: " + text, file=sys.stderr)
-    return 1
-
-
-def load_png(path):
-    """Return (bytes, None) for a valid 1024x1024 PNG, else (None, reason)."""
+def png_size(path):
     with open(path, "rb") as handle:
-        blob = handle.read()
-    if blob[:8] != SIGNATURE:
-        return None, "not a PNG file: " + path
-    width, height = struct.unpack(">II", blob[16:24])
-    if (width, height) != WANTED:
-        return None, "entry.png is %dx%d, expected 1024x1024" % (
-            width, height)
-    return blob, None
+        head = handle.read(33)
+    if len(head) < 33 or head[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG file")
+    if head[12:16] != b"IHDR":
+        raise ValueError("missing IHDR chunk")
+    width, height = struct.unpack(">II", head[16:24])
+    return width, height
 
 
-def run():
-    destination_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-    original, problem = load_png(REPO_PNG)
-    if problem:
-        return complain(problem)
-    os.makedirs(destination_dir, exist_ok=True)
-    destination = os.path.join(destination_dir, "entry.png")
-    shutil.copyfile(REPO_PNG, destination)
-    delivered, problem = load_png(destination)
-    if problem:
-        return complain("output failed checks: " + problem)
-    if len(delivered) != len(original):
-        return complain("copied entry.png has the wrong length")
-    if delivered != original:
-        return complain("copied entry.png differs from the repository copy")
-    print("wrote " + destination)
-    print("size: 1024x1024")
-    print("bytes: %d" % len(original))
-    print("sha256: " + hashlib.sha256(original).hexdigest())
-    print("verified: output matches the repository entry.png byte for byte")
+def file_hash(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def main():
+    here = os.path.dirname(os.path.abspath(__file__))
+    source = os.path.join(here, "entry.png")
+    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR")
+    if not out_dir:
+        print("MAKEFUN_OUTPUT_DIR is not set", file=sys.stderr)
+        return 2
+    if not os.path.isfile(source):
+        print(f"missing source: {source}", file=sys.stderr)
+        return 2
+    width, height = png_size(source)
+    if (width, height) != (1024, 1024):
+        print(f"bad size: {width}x{height}, expected 1024x1024", file=sys.stderr)
+        return 1
+    os.makedirs(out_dir, exist_ok=True)
+    target = os.path.join(out_dir, "entry.png")
+    shutil.copyfile(source, target)
+    source_bytes = os.path.getsize(source)
+    target_bytes = os.path.getsize(target)
+    if source_bytes != target_bytes:
+        print(f"copy mismatch: {source_bytes} vs {target_bytes} bytes", file=sys.stderr)
+        return 1
+    if file_hash(source) != file_hash(target):
+        print("copy mismatch: hashes differ", file=sys.stderr)
+        return 1
+    print(f"verified entry.png 1024x1024 {target_bytes} bytes sha256={file_hash(target)}")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    sys.exit(main())
